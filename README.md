@@ -1,5 +1,9 @@
 # truebrutein.force
 
+## DISCAIMER
+
+This is a fork of alexras/truepeacein.space. It is not marked so. My mistake.
+
 ## A Metroid Password Generation Tool; The Original
 
 I recently came across
