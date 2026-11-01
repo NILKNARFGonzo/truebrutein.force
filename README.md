@@ -10,12 +10,10 @@ so I decided to make my own.
 The name comes from the end screen for Metroid, which asks the player to "pray
 for a true peace in space".
 
-This project was bootstrapped with
-[Create React App](https://github.com/facebookincubator/create-react-app). I
-got technical details on Metroid's password system from
+Technical details on Metroid's password system come from
 [jdratlif's Password Format Guide][password-format-guide], and transliterated
-some of the bit-munging from the source for [mpg][mpg], which is why this is
-released under GPL 3.
+password bit-munging from the source for [mpg][mpg]. This project is released
+under GPL 3.
 
 ## Python CLI
 

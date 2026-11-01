@@ -1,15 +1,14 @@
-# See http://help.github.com/ignore-files/ for more about ignoring files.
+# Python bytecode and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
-# dependencies
-node_modules
+# Virtual environments
+.venv/
+venv/
 
-# testing
-coverage
-
-# production
-build
-
-# misc
+# Local environment and editor files
 .DS_Store
 .env
-npm-debug.log
+.idea/
+.vscode/
