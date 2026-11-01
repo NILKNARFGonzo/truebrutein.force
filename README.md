@@ -4,21 +4,6 @@
 
 This is a fork of alexras/truepeacein.space. It is not marked so. My mistake.
 
-## A Metroid Password Generation Tool; The Original
-
-I recently came across
-[a video on YouTube talking about Metroid's password system][metroid-password-system-youtube]. I
-looked around for online password generators for Metroid and couldn't find any,
-so I decided to make my own.
-
-The name comes from the end screen for Metroid, which asks the player to "pray
-for a true peace in space".
-
-Technical details on Metroid's password system come from
-[jdratlif's Password Format Guide][password-format-guide], and transliterated
-password bit-munging from the source for [mpg][mpg]. This project is released
-under GPL 3.
-
 ## Python CLI
 
 `metroid_password.py` is a dependency-free command-line tool for decoding,
