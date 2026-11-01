@@ -1,6 +1,6 @@
-# truepeacein.space
+# truebrutein.force
 
-## A Metroid Password Generation Tool
+## A Metroid Password Generation Tool; The Original
 
 I recently came across
 [a video on YouTube talking about Metroid's password system][metroid-password-system-youtube]. I
