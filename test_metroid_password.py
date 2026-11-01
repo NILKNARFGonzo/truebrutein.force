@@ -7,6 +7,11 @@ import metroid_password as metroid
 
 
 class PasswordFormatTests(unittest.TestCase):
+    @staticmethod
+    def password_from_raw_buffer(buffer):
+        buffer.fix_checksum()
+        return metroid.buffer_to_password(buffer)
+
     def test_known_password_vectors(self):
         cases = (
             (
@@ -62,21 +67,44 @@ class PasswordFormatTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid character"):
             metroid.password_to_buffer("!" * 24)
 
-    def test_find_case_recovers_known_password_from_grouped_lowercase(self):
-        candidate = metroid.find_valid_capitalization("justin bailey------------")
-        self.assertIsNotNone(candidate)
-        buffer = metroid.password_to_buffer(candidate)
+    def test_find_case_yields_all_safe_capitalizations(self):
+        candidates = list(metroid.find_valid_capitalizations("00000000000040000000000g"))
+        self.assertGreater(len(candidates), 0)
+        for candidate in candidates:
+            buffer = metroid.password_to_buffer(candidate)
+            self.assertTrue(buffer.checksum_ok())
+            self.assertTrue(metroid.game_state_valid(buffer))
+            self.assertEqual(len(candidate), 24)
+
+    def test_safety_checks_allow_long_timer(self):
+        buffer = metroid.BitBuffer()
+        buffer.set_bit(76, True)
+        buffer.data[11:15] = (1_000_000_000).to_bytes(4, "little")
+        password = self.password_from_raw_buffer(buffer)
+        decoded = metroid.password_to_buffer(password)
+        self.assertTrue(decoded.checksum_ok())
+        self.assertTrue(metroid.game_state_valid(decoded))
+
+    def test_find_case_rejects_the_previously_risky_candidate(self):
+        buffer = metroid.password_to_buffer("EAtINGcrAyOniSverytastYs")
         self.assertTrue(buffer.checksum_ok())
-        self.assertTrue(metroid.game_state_valid(buffer))
-        self.assertEqual(len(candidate), 24)
+        self.assertFalse(metroid.game_state_valid(buffer))
 
     def test_find_case_reports_no_match_when_case_cannot_change_input(self):
-        self.assertIsNone(metroid.find_valid_capitalization("0" * 23 + "1"))
+        self.assertEqual(list(metroid.find_valid_capitalizations("0" * 23 + "1")), [])
 
     def test_find_case_requires_24_password_characters(self):
         with self.assertRaisesRegex(ValueError, "exactly 24"):
-            metroid.find_valid_capitalization("too short")
+            list(metroid.find_valid_capitalizations("too short"))
 
+    def test_safety_checks_reject_invalid_start_flags(self):
+        buffer = metroid.BitBuffer()
+        buffer.set_bit(65, True)
+        buffer.set_bit(66, True)
+        password = self.password_from_raw_buffer(buffer)
+        decoded = metroid.password_to_buffer(password)
+        self.assertTrue(decoded.checksum_ok())
+        self.assertFalse(metroid.game_state_valid(decoded))
 
 class GameStateTests(unittest.TestCase):
     def test_game_state_fields_round_trip(self):
@@ -151,12 +179,56 @@ class CommandLineTests(unittest.TestCase):
     def test_find_case_command_accepts_grouped_lowercase(self):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            result = metroid.main(["find-case", "justin bailey------------"])
+            result = metroid.main(["find-case", "0000 0000 0000 4000 0000 000g"])
         self.assertEqual(result, 0)
-        candidate = stdout.getvalue().strip()
-        buffer = metroid.password_to_buffer(candidate)
-        self.assertTrue(buffer.checksum_ok())
-        self.assertTrue(metroid.game_state_valid(buffer))
+        lines = stdout.getvalue().splitlines()
+        candidates = [line for line in lines if line and not line.startswith(" ")]
+        self.assertGreater(len(candidates), 0)
+        for candidate in candidates:
+            buffer = metroid.password_to_buffer(candidate)
+            self.assertTrue(buffer.checksum_ok())
+            self.assertTrue(metroid.game_state_valid(buffer))
+        self.assertIn("NTSC:", stdout.getvalue())
+        self.assertIn("Missiles:", stdout.getvalue())
+        self.assertIn("Equipped:", stdout.getvalue())
+        self.assertIn("Defeated:", stdout.getvalue())
+
+    def test_find_case_command_lists_all_safe_results(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = metroid.main(["find-case", "eating crayon isvery tastys"])
+        self.assertEqual(result, 0)
+        lines = stdout.getvalue().splitlines()
+        candidates = [line for line in lines if line and not line.startswith(" ")]
+        self.assertGreater(len(candidates), 1)
+        for candidate in candidates:
+            buffer = metroid.password_to_buffer(candidate)
+            self.assertTrue(buffer.checksum_ok())
+            self.assertTrue(metroid.game_state_valid(buffer))
+        ntsc_ages = [
+            metroid.parse_time(line.split("NTSC: ", 1)[1].split(" |", 1)[0])
+            for line in lines
+            if line.startswith("  NTSC: ")
+        ]
+        self.assertEqual(ntsc_ages, sorted(ntsc_ages))
+
+    def test_find_case_sorts_by_requested_stat(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = metroid.main([
+                "find-case",
+                "eating crayon isvery tastys",
+                "--sort",
+                "missiles",
+            ])
+        self.assertEqual(result, 0)
+        missile_counts = [
+            int(line.split("Missiles: ", 1)[1].split(" |", 1)[0])
+            for line in stdout.getvalue().splitlines()
+            if line.startswith("  Missiles: ")
+        ]
+        self.assertGreater(len(missile_counts), 1)
+        self.assertEqual(missile_counts, sorted(missile_counts))
 
     def test_edit_emits_a_valid_updated_password(self):
         stdout = io.StringIO()
@@ -166,6 +238,26 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertTrue(metroid.password_to_buffer(output).checksum_ok())
         self.assertEqual(metroid.game_state(metroid.password_to_buffer(output))["missiles"], 27)
+
+    def test_edit_allows_long_game_timer(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = metroid.main(["edit", "0" * 24, "--ntsc-time", "1000:00:00"])
+        self.assertEqual(result, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        buffer = metroid.password_to_buffer(stdout.getvalue().strip())
+        self.assertTrue(metroid.game_state_valid(buffer))
+        self.assertGreater(metroid.timer_seconds(buffer, 60), 999 * 60 * 60)
+
+    def test_fix_checksum_refuses_unsafe_state(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = metroid.main(["fix-checksum", "EAtINGcrAyOniSverytastYs"])
+        self.assertEqual(result, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Refusing to output", stderr.getvalue())
 
 
 if __name__ == "__main__":

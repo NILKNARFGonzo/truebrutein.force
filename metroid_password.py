@@ -239,7 +239,12 @@ def game_state(buffer):
 
 
 def game_state_valid(buffer):
-    return not buffer.get_bit(67) and (buffer.get_bit(76) or not buffer.get_bit(0))
+    start_bits = tuple(buffer.get_bit(bit) for bit in (64, 65, 66))
+    if buffer.get_bit(67) or start_bits not in START_LOCATIONS.values():
+        return False
+    if not (buffer.get_bit(76) or not buffer.get_bit(0)):
+        return False
+    return True
 
 
 def _checksum_difference(password):
@@ -247,8 +252,8 @@ def _checksum_difference(password):
     return (sum(buffer.data[:17]) - buffer.data[17]) % 256
 
 
-def find_valid_capitalization(password):
-    """Return a checksum- and game-valid capitalization, or None if absent."""
+def find_valid_capitalizations(password):
+    """Yield every checksum- and game-valid capitalization."""
     normalized = "".join(password.split())
     if len(normalized) != PASSWORD_LENGTH:
         raise ValueError(f"Password must be exactly {PASSWORD_LENGTH} characters")
@@ -308,8 +313,67 @@ def find_valid_capitalization(password):
                 candidate = "".join(candidate)
                 buffer = password_to_buffer(candidate)
                 if buffer.checksum_ok() and game_state_valid(buffer):
-                    return candidate
-    return None
+                    yield candidate
+
+
+def capitalization_stats(password):
+    buffer = password_to_buffer(password)
+    state = game_state(buffer)
+    item_counts = [
+        len(items)
+        for area in state["items"].values()
+        for kind, items in area.items()
+        if kind in ("missile", "energy")
+    ]
+    collected_items = sum(
+        sum(items)
+        for area in state["items"].values()
+        for kind, items in area.items()
+        if kind in ("missile", "energy")
+    )
+    equipped = [
+        name for name, status in state["powerups"].items() if status["equipped"]
+    ]
+    defeated = [
+        name for name, killed in state["bossesKilled"].items() if killed
+    ]
+    return {
+        "ntsc_seconds": timer_seconds(buffer, 60),
+        "pal_seconds": timer_seconds(buffer, 50),
+        "missiles": state["missiles"],
+        "items": collected_items,
+        "item_total": sum(item_counts),
+        "powerups": len(equipped),
+        "bosses": len(defeated),
+        "location": state["startLocation"],
+        "equipped": equipped,
+        "defeated": defeated,
+    }
+
+
+def _print_capitalization(password, stats):
+    print(password)
+    print(
+        f"  NTSC: {format_time(stats['ntsc_seconds'])} | "
+        f"PAL: {format_time(stats['pal_seconds'])}"
+    )
+    print(
+        f"  Missiles: {stats['missiles']} | "
+        f"Items: {stats['items']}/{stats['item_total']} | "
+        f"Power-ups: {stats['powerups']} | "
+        f"Bosses defeated: {stats['bosses']} | "
+        f"Start: {stats['location']}"
+    )
+    print(f"  Equipped: {', '.join(stats['equipped']) or 'none'}")
+    print(f"  Defeated: {', '.join(stats['defeated']) or 'none'}")
+    print()
+
+
+def require_safe_game_state(buffer):
+    if not game_state_valid(buffer):
+        raise ValueError(
+            "Refusing to output a password that fails conservative game-state checks"
+        )
 
 
 def _set_indexed_item(buffer, specification, kind, value):
@@ -423,9 +487,15 @@ def make_parser():
     validate.add_argument("password")
     find_case = commands.add_parser(
         "find-case",
-        help="find a valid capitalization for a password with unknown letter case",
+        help="list every safe capitalization for a password with unknown letter case",
     )
     find_case.add_argument("password", help="24 characters; optional grouping whitespace is ignored")
+    find_case.add_argument(
+        "--sort",
+        choices=("hours", "ntsc", "pal", "missiles", "items", "powerups", "bosses", "location"),
+        default="hours",
+        help="sort results ascending by this stat (default: hours, using NTSC time)",
+    )
     fix = commands.add_parser("fix-checksum", help="repair a password's checksum")
     fix.add_argument("password")
     edit = commands.add_parser("edit", help="edit game state and print a new password")
@@ -436,11 +506,27 @@ def make_parser():
 
 def run(args):
     if args.command == "find-case":
-        candidate = find_valid_capitalization(args.password)
-        if candidate is None:
+        candidates = [
+            (candidate, capitalization_stats(candidate))
+            for candidate in find_valid_capitalizations(args.password)
+        ]
+        if not candidates:
             print("No valid capitalization found.", file=sys.stderr)
             return 1
-        print(candidate)
+        sort_key = {
+            "hours": "ntsc_seconds",
+            "ntsc": "ntsc_seconds",
+            "pal": "pal_seconds",
+            "missiles": "missiles",
+            "items": "items",
+            "powerups": "powerups",
+            "bosses": "bosses",
+            "location": "location",
+        }[args.sort]
+        for candidate, stats in sorted(
+            candidates, key=lambda result: (result[1][sort_key], result[0])
+        ):
+            _print_capitalization(candidate, stats)
         return 0
 
     buffer = password_to_buffer(args.password)
@@ -448,7 +534,7 @@ def run(args):
         checksum_ok = buffer.checksum_ok()
         state_valid = game_state_valid(buffer)
         if checksum_ok and state_valid:
-            print("Password checksum and game state are valid.")
+            print("Password checksum and conservative game-state checks passed.")
             return 0
         problems = []
         if not checksum_ok:
@@ -459,10 +545,12 @@ def run(args):
         return 1
     if args.command == "fix-checksum":
         buffer.fix_checksum()
+        require_safe_game_state(buffer)
         print(buffer_to_password(buffer))
         return 0
     if args.command == "edit":
         apply_edits(buffer, args)
+        require_safe_game_state(buffer)
         if args.json:
             print(json.dumps({
                 "password": buffer_to_password(buffer),
